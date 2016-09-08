@@ -58,6 +58,10 @@
 # [*fluentd_syslog_port*]
 #   (Optional, default 42185) Port on which fluentd should listen if
 #   $fluentd_listen_syslog is true.
+#
+# [*fluentd_extra_config*]
+#   (Optional) Optional configuration for fluentd, supplied directly
+#   to the 'config' element of ::fluentd::config.
 class tripleo::profile::base::logging::fluentd (
   $step = hiera('step', undef),
   $fluentd_sources = undef,
@@ -67,9 +71,15 @@ class tripleo::profile::base::logging::fluentd (
   $fluentd_pos_file_path = undef,
   $fluentd_use_ssl = undef,
   $fluentd_ssl_certificate = undef,
+  $fluentd_private_key = undef,
+  $fluentd_private_key_passphrase = undef,
   $fluentd_shared_key = undef,
-  $fluentd_listen_syslog = true,
-  $fluentd_syslog_port = 42185
+  $fluentd_listen_syslog = undef,
+  $fluentd_syslog_port = 42185,
+  $fluentd_extra_config = undef,
+  $fluentd_listen = false,
+  $fluentd_listen_address = '0.0.0.0',
+  $fluentd_listen_port = undef,
 ) {
   if $step == undef or $step >= 3 {
     include ::fluentd
@@ -95,8 +105,30 @@ class tripleo::profile::base::logging::fluentd (
       plugin_provider => 'yum',
     }
 
+    if $fluentd_use_ssl {
+      ::fluentd::plugin { 'rubygem-fluent-plugin-secure-forward':
+        plugin_provider => 'yum',
+      }
+
+      file {'/etc/fluentd/ca_cert.pem':
+        content => $fluentd_ssl_certificate,
+        owner   => $::fluentd::config_owner,
+        group   => $::fluentd::config_group,
+        mode    => '0444',
+      }
+
+      if $fluentd_private_key {
+        file {'/etc/fluentd/ca_key.pem':
+          content => $fluentd_private_key,
+          owner   => $::fluentd::config_owner,
+          group   => $::fluentd::config_group,
+          mode    => '0400',
+        }
+      }
+    }
+
     if $fluentd_sources {
-      ::fluentd::config { '100-openstack-sources.conf':
+      ::fluentd::config { '100-base-sources.conf':
         config => {
           'source' => $fluentd_sources,
         }
@@ -104,8 +136,8 @@ class tripleo::profile::base::logging::fluentd (
     }
 
     if $fluentd_listen_syslog {
-      # fluentd will receive syslog messages by listening on a local udp
-      # socket.
+      # fluentd will receive syslog messages from rsyslogd by listening on a
+      # local udp socket.
       ::fluentd::config { '110-system-sources.conf':
         config => {
           'source' => {
@@ -126,8 +158,52 @@ class tripleo::profile::base::logging::fluentd (
       }
     }
 
+    if $fluentd_listen {
+      if $fluentd_use_ssl {
+        $_fluentd_listen_port = $fluentd_listen_port ? {
+          undef   => 24284,
+          default => $fluentd_listen_port,
+        }
+
+        ::fluentd::config { '120-remote-fluentd-sources.conf':
+          config => {
+            'source' => {
+              # lint:ignore:single_quote_string_with_variables
+              # lint:ignore:quoted_booleans
+              'type'                      => 'secure_forward',
+              'self_hostname'             => '${hostname}',
+              'secure'                    => 'true',
+              'ca_cert_path'              => '/etc/fluentd/ca_cert.pem',
+              'ca_private_key_path'       => '/etc/fluentd/ca_key.pem',
+              'ca_private_key_passphrase' => $fluentd_private_key_passphrase,
+              'shared_key'                => $fluentd_shared_key,
+              'bind'                      => $fluentd_listen_address,
+              'port'                      => $_fluentd_listen_port,
+              # lint:endignore
+              # lint:endignore
+            }
+          }
+        }
+      } else {
+        $_fluentd_listen_port = $fluentd_listen_port ? {
+          undef   => 24224,
+          default => $fluentd_listen_port,
+        }
+
+        ::fluentd::config { '120-remote-fluentd.conf':
+          config => {
+            'source' => {
+              'type' => 'forward',
+              'bind' => $fluentd_listen_address,
+              'port' => $_fluentd_listen_port,
+            }
+          }
+        }
+      }
+    }
+
     if $fluentd_filters {
-      ::fluentd::config { '200-openstack-filters.conf':
+      ::fluentd::config { '200-base-filters.conf':
         config => {
           'filter' => $fluentd_filters,
         }
@@ -136,18 +212,7 @@ class tripleo::profile::base::logging::fluentd (
 
     if $fluentd_servers and !empty($fluentd_servers) {
       if $fluentd_use_ssl {
-        ::fluentd::plugin { 'rubygem-fluent-plugin-secure-forward':
-          plugin_provider => 'yum',
-        }
-
-        file {'/etc/fluentd/ca_cert.pem':
-          content => $fluentd_ssl_certificate,
-          owner   => $::fluentd::config_owner,
-          group   => $::fluentd::config_group,
-          mode    => '0444',
-        }
-
-        ::fluentd::config { '300-openstack-matches.conf':
+        ::fluentd::config { '300-base-forward.conf':
           config => {
             'match' => {
               # lint:ignore:single_quote_string_with_variables
@@ -165,7 +230,7 @@ class tripleo::profile::base::logging::fluentd (
           }
         }
       } else {
-        ::fluentd::config { '300-openstack-matches.conf':
+        ::fluentd::config { '300-base-forward.conf':
           config => {
             'match' => {
               'type'        => 'forward',
@@ -175,6 +240,12 @@ class tripleo::profile::base::logging::fluentd (
           }
         }
       }
+    }
+  }
+
+  if $fluentd_extra_config {
+    ::fluentd_config { '900-extra-config.conf':
+      config => $fluentd_extra_config,
     }
   }
 }
