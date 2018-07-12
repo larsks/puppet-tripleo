@@ -49,11 +49,6 @@ class tripleo::firewall::pre(
     extras  => $firewall_settings,
   }
 
-  tripleo::firewall::rule{ '003 accept ssh':
-    dport  => '22',
-    extras => $firewall_settings,
-  }
-
   tripleo::firewall::rule{ '004 accept ipv6 dhcpv6':
     dport       => '546',
     proto       => 'udp',
